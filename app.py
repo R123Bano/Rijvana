@@ -123,6 +123,7 @@ defaults = {
     "past_history_loaded": False,
     "all_history": [],
     "live_news": [],
+    "liked_articles": [],
 }
 for key, val in defaults.items():
     if key not in st.session_state:
@@ -209,6 +210,29 @@ def load_past_history():
                    time_context=get_time_period(datetime.now().hour))
 
     st.session_state.past_history_loaded = True
+
+    # ── Pre-populate liked_articles from loaded history ───────────────────────
+    liked = []
+    for h in all_history:
+        if h.get("action") != "like":
+            continue
+        nid = h["news_id"]
+        # Try to get the abstract from the engine's news dict
+        news_entry = engine.news_dict.get(nid, {}) if engine.news_dict else {}
+        liked.append({
+            "news_id": nid,
+            "title": h.get("title", "") or news_entry.get("title", ""),
+            "abstract": news_entry.get("abstract", ""),
+            "category": h.get("category", "") or news_entry.get("category", ""),
+            "score": 0,
+            "liked_at": h.get("timestamp", ""),
+        })
+    # Merge with any already-liked in this session (avoid duplicates)
+    existing_ids = {a["news_id"] for a in st.session_state.liked_articles}
+    for item in liked:
+        if item["news_id"] not in existing_ids:
+            st.session_state.liked_articles.append(item)
+            existing_ids.add(item["news_id"])
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # GOOGLE OAUTH HELPERS
@@ -564,8 +588,25 @@ def render_onboarding():
 
                 # Set mood categories for initial recommendations
                 st.session_state.mood_categories = interests
+
+                # Update auth_user onboarded flag in session so the dashboard
+                # knows this is no longer a cold-start user
+                if st.session_state.auth_user:
+                    st.session_state.auth_user["onboarded"] = True
+                    st.session_state.auth_user["interests"] = interests
+
+                # Pre-generate recommendations right now based on interests
+                # so the Feed page shows articles immediately without an extra click
+                recs = engine.get_cold_start_recommendations(
+                    preferred_categories=[c.lower() for c in interests],
+                    num_recommendations=20,
+                )
+                st.session_state.recommendations = recs
+                st.session_state.recs_loaded = True
+
+                # Send to Feed page directly
                 st.session_state.stage = "dashboard"
-                st.session_state.recs_loaded = False
+                st.session_state.page = "📰 Feed"
                 st.rerun()
         else:
             st.button("Select 3 topics to continue", disabled=True, use_container_width=True)
@@ -690,8 +731,24 @@ def handle_click(article: dict, feedback_type: str = "like", dwell_time: float =
     st.session_state.session_clicks.append(click_record)
     st.session_state.all_history.insert(0, click_record)  # Add to persistent history
 
-    # Force refresh recommendations after interaction
-    st.session_state.recommendations = []
+    # Track liked articles separately (only for explicit "like" actions)
+    if feedback_type == "like":
+        if "liked_articles" not in st.session_state:
+            st.session_state.liked_articles = []
+        # Avoid duplicates
+        existing_ids = [a["news_id"] for a in st.session_state.liked_articles]
+        if article["news_id"] not in existing_ids:
+            st.session_state.liked_articles.insert(0, {
+                "news_id": article["news_id"],
+                "title": article.get("title", ""),
+                "abstract": article.get("abstract", ""),
+                "category": article.get("category", ""),
+                "score": article.get("score", 0),
+                "liked_at": datetime.now().isoformat(),
+            })
+
+    # NOTE: Recommendations are NOT cleared here so "Done Reading" keeps the feed intact.
+    # They will be refreshed only when the user explicitly clicks "Get Recommendations".
 
     # Store the last clicked article so we can show "similar articles"
     st.session_state.last_clicked_article = article
@@ -798,7 +855,7 @@ def render_dashboard():
         </div>
         """, unsafe_allow_html=True)
 
-        nav_options = ["🏠 Dashboard", "📰 Feed", "👤 Profile", "📊 Analytics"]
+        nav_options = ["🏠 Dashboard", "📰 Feed", "❤️ Liked", "👤 Profile", "📊 Analytics"]
         if is_news_api_configured():
             nav_options.insert(2, "🔴 Live News")
         page = st.radio(
@@ -843,6 +900,9 @@ def render_dashboard():
     load_past_history()
 
     # ─── Auto-load recommendations on first visit ─────────────────
+    # Always generate recs on login if not already loaded.
+    # New users get cold-start recs from their selected interests.
+    # Returning users get personalized recs from their history.
     if not st.session_state.recs_loaded and not st.session_state.recommendations:
         with st.spinner("Curating your personalized feed..."):
             recs = generate_recs()
@@ -854,6 +914,8 @@ def render_dashboard():
         render_page_dashboard()
     elif page == "📰 Feed":
         render_page_feed()
+    elif page == "❤️ Liked":
+        render_page_liked()
     elif page == "🔴 Live News":
         render_page_live_news()
     elif page == "👤 Profile":
@@ -900,7 +962,7 @@ def render_page_dashboard():
     session_start = st.session_state.get("session_start_index", 0)
     session_clicks = max(0, len(st.session_state.session_clicks) - session_start)
 
-    user_type = "Warm User" if total_clicks >= 5 else "Cold Start"
+    user_type = "Active Reader" if total_clicks >= 5 else "New Reader"
     time_period = get_time_period(hour)
 
     # Context bar
@@ -930,10 +992,6 @@ def render_page_dashboard():
         <div class="context-card">
             <div class="context-value">{session_clicks}</div>
             <div class="context-label">This Session</div>
-        </div>
-        <div class="context-card">
-            <div class="context-value">{"🟢" if total_clicks >= 5 else "🔵"} {user_type}</div>
-            <div class="context-label">Status</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1012,7 +1070,7 @@ def render_page_dashboard():
             </div>
             """, unsafe_allow_html=True)
 
-    # Top recommended articles preview — show 10
+    # ── Recommendations — always shown ────────────────────────────
     if st.session_state.recommendations:
         st.markdown("---")
         st.markdown("### Recommended for You")
@@ -1021,6 +1079,14 @@ def render_page_dashboard():
         for idx, article in enumerate(top_recs):
             with cols[idx % 2]:
                 render_news_card(article, show_signals=False, show_actions=True, idx=idx)
+    else:
+        st.markdown("---")
+        st.markdown("""
+        <div style="text-align:center; padding: 30px 0;">
+            <div style="font-size:1.4rem; margin-bottom:8px;">📰</div>
+            <div style="color:#86868b;">Go to <strong style="color:#0a84ff;">Feed</strong> to refresh your recommendations.</div>
+        </div>
+        """, unsafe_allow_html=True)
 
     # ─── All History (from database, persists across sessions) ────
     st.markdown("---")
@@ -1136,7 +1202,7 @@ def render_page_feed():
     with col_sig:
         show_signals = st.checkbox("Show signals", value=False)
 
-    if gen_btn or not st.session_state.recommendations:
+    if gen_btn:
         mood_cats = list(set(selected_cats + st.session_state.get("mood_categories", [])))
 
         with st.spinner("AI is curating your feed..."):
@@ -1162,7 +1228,6 @@ def render_page_feed():
 
             st.session_state.recommendations = recs
             st.session_state.rec_latency = (time.time() - start_t) * 1000
-            st.rerun()
 
     # Display recommendations
     recs = st.session_state.recommendations
@@ -1230,7 +1295,86 @@ def render_page_feed():
                 render_news_card(article, show_signals=show_signals, show_actions=True, idx=idx)
 
     elif uid:
-        st.info("Hit **Get Recommendations** to see your personalized feed!")
+        st.markdown("""
+        <div style="text-align:center; padding:40px 0; color:#48484a;">
+            <div style="font-size:2rem; margin-bottom:12px;">📰</div>
+            <div style="font-size:1rem; color:#86868b;">Click <strong style="color:#0a84ff;">Get Recommendations</strong> above to load your personalized feed.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ─── PAGE: LIKED ─────────────────────────────────────────────────────────────
+
+def render_page_liked():
+    """Display all articles the user has liked."""
+    st.markdown("# ❤️ Liked Articles")
+    st.markdown('<p style="color: #86868b; margin-top: -8px;">Articles you\'ve saved by liking them.</p>', unsafe_allow_html=True)
+
+    liked = st.session_state.get("liked_articles", [])
+
+    if not liked:
+        st.markdown("""
+        <div style="text-align: center; padding: 60px 20px;">
+            <div style="font-size: 3rem; margin-bottom: 16px;">❤️</div>
+            <div style="font-size: 1.2rem; font-weight: 600; color: #f5f5f7; margin-bottom: 8px;">No liked articles yet</div>
+            <div style="color: #86868b; font-size: 0.9rem;">Head to the Feed and tap 👍 on articles you enjoy — they'll appear here.</div>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    st.markdown(f"""
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <span style="color: #86868b; font-size: 0.85rem;">
+            <span style="color: #ff375f;">❤️</span>
+            &nbsp;{len(liked)} liked article{"s" if len(liked) != 1 else ""}
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Category filter for liked articles
+    liked_cats = sorted(set(a.get("category", "") for a in liked if a.get("category")))
+    if liked_cats:
+        filter_cat = st.selectbox(
+            "Filter by category",
+            ["All"] + liked_cats,
+            format_func=lambda x: f"{get_category_emoji(x)} {get_category_label(x)}" if x != "All" else "📋 All Categories",
+            label_visibility="collapsed",
+        )
+        if filter_cat != "All":
+            liked = [a for a in liked if a.get("category") == filter_cat]
+
+    col1, col2 = st.columns(2)
+    for idx, article in enumerate(liked):
+        with col1 if idx % 2 == 0 else col2:
+            cat = article.get("category", "news")
+            emoji = get_category_emoji(cat)
+            liked_at = ""
+            if article.get("liked_at"):
+                try:
+                    dt = datetime.fromisoformat(str(article["liked_at"]).replace("Z", "+00:00"))
+                    liked_at = dt.strftime("%b %d, %I:%M %p")
+                except Exception:
+                    pass
+
+            st.markdown(f"""
+            <div class="news-card" style="animation-delay: {idx * 0.06}s; border-left: 3px solid #ff375f;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                    <span class="category-badge {cat if cat in CATEGORY_INFO else 'default'}">{emoji} {cat}</span>
+                    <span style="font-size:0.7rem; color:#48484a;">{"❤️ " + liked_at if liked_at else "❤️ Liked"}</span>
+                </div>
+                <div class="news-title">{article.get("title", "Untitled")}</div>
+                {f'<div class="news-abstract">{article.get("abstract", "")}</div>' if article.get("abstract") else ""}
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Unlike button
+            if st.button("💔 Unlike", key=f"unlike_{article['news_id']}_{idx}"):
+                st.session_state.liked_articles = [
+                    a for a in st.session_state.liked_articles
+                    if a["news_id"] != article["news_id"]
+                ]
+                st.toast("Removed from liked articles.", icon="💔")
+                st.rerun()
 
 
 # ─── PAGE: LIVE NEWS ─────────────────────────────────────────────────────────
