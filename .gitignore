@@ -13,3 +13,6 @@ venv/
 
 # OS files
 .DS_Store
+
+*.pkl
+models/
