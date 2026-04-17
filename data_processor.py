@@ -22,8 +22,8 @@ from sklearn.preprocessing import normalize
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TRAIN_DIR = os.path.join(BASE_DIR, "..", "MINDsmall_train")
-DEV_DIR = os.path.join(BASE_DIR, "..", "MINDsmall_dev")
+TRAIN_DIR = os.path.join(BASE_DIR, "MINDsmall_train")
+DEV_DIR = os.path.join(BASE_DIR, "MINDsmall_dev")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 CATEGORIES = [

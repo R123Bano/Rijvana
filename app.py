@@ -114,6 +114,7 @@ defaults = {
     "current_mood": "neutral",
     "mood_categories": [],
     "session_clicks": [],
+    "session_start_index": 0,
     "rec_latency": 0,
     "recommendation_history": [],
     "page": "Dashboard",
@@ -181,6 +182,14 @@ def load_past_history():
             })
 
     st.session_state.all_history = all_history
+
+    # ── Restore all_history into session_clicks so "Articles Read" count
+    #    and "Recent Activity" survive page refresh and re-login ──────────
+    st.session_state.session_clicks = list(all_history)
+
+    # Remember how many clicks existed BEFORE this session started.
+    # "This Session" counter = total clicks minus this saved offset.
+    st.session_state.session_start_index = len(all_history)
 
     # Rebuild RL bandit from past interactions
     for click in all_history:
@@ -684,9 +693,11 @@ def handle_click(article: dict, feedback_type: str = "like", dwell_time: float =
     # Force refresh recommendations after interaction
     st.session_state.recommendations = []
 
+    # Store the last clicked article so we can show "similar articles"
+    st.session_state.last_clicked_article = article
+
     if feedback_type == "like":
         st.toast(f"Liked: {article.get('title', '')[:50]}...", icon="👍")
-
 
 def handle_skip(article: dict):
     """Handle skip — negative RL signal."""
@@ -799,11 +810,12 @@ def render_dashboard():
 
         st.markdown("---")
 
-        # Quick stats
+        # Quick stats — sidebar shows only NEW clicks from this login session
         if st.session_state.current_user_id:
             uid = st.session_state.current_user_id
             profile = engine.get_user_profile_summary(uid)
-            clicks = len(st.session_state.session_clicks)
+            _s_start = st.session_state.get("session_start_index", 0)
+            clicks = max(0, len(st.session_state.session_clicks) - _s_start)
 
             st.markdown(f"""
             <div style="padding: 0 4px;">
@@ -877,8 +889,17 @@ def render_page_dashboard():
 
     uid = st.session_state.current_user_id
     profile = engine.get_user_profile_summary(uid)
-    total_clicks = profile["total_clicks"] if profile else 0
-    session_clicks = len(st.session_state.session_clicks)
+
+    # ── Articles Read: read from database so it persists after refresh/re-login
+    db_stats = get_user_stats(uid)
+    total_clicks = db_stats.get("total_clicks", 0) if db_stats else 0
+    if total_clicks == 0 and profile:
+        total_clicks = profile.get("total_clicks", 0)
+
+    # ── This Session: only NEW clicks added after history was loaded on login
+    session_start = st.session_state.get("session_start_index", 0)
+    session_clicks = max(0, len(st.session_state.session_clicks) - session_start)
+
     user_type = "Warm User" if total_clicks >= 5 else "Cold Start"
     time_period = get_time_period(hour)
 
@@ -1145,6 +1166,43 @@ def render_page_feed():
 
     # Display recommendations
     recs = st.session_state.recommendations
+    if st.session_state.get("last_clicked_article"):
+        last = st.session_state.last_clicked_article
+        uid = st.session_state.current_user_id
+
+        st.markdown(f"### 🔁 More Like: *{last['title'][:60]}...*")
+
+        similar = engine.recommend(
+            user_id=uid,
+            history_ids=[last["news_id"]],
+            mood_categories=[last["category"]],
+            num_recommendations=3,
+        )
+
+        sim_cols = st.columns(3)
+        for i, art in enumerate(similar):
+            with sim_cols[i]:
+                st.markdown(f"""
+                <div style="background:#1c1c1e; border-radius:12px; padding:14px; border:1px solid #2c2c2e;">
+                    <div style="font-size:0.75rem; color:#0a84ff;">{art['category'].upper()}</div>
+                    <div style="font-size:0.9rem; font-weight:600; color:#f5f5f7; margin-top:4px;">
+                        {art['title'][:80]}
+                    </div>
+                    <div style="font-size:0.78rem; color:#86868b; margin-top:6px;">
+                        {art['abstract'][:100]}...
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                if st.button("👍 Like", key=f"sim_like_{art['news_id']}_{i}"):
+                    handle_click(art, "like")
+                    st.rerun()
+
+        if st.button("✕ Dismiss", key="dismiss_similar"):
+            st.session_state.last_clicked_article = None
+            st.rerun()
+
+        st.markdown("---")
     if recs:
         latency = st.session_state.rec_latency
         latency_class = "slow" if latency > 2000 else ""

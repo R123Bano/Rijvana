@@ -16,3 +16,13 @@ venv/
 
 *.pkl
 models/
+
+# databases
+*.db
+
+# datasets
+MINDsmall_dev/
+MINDsmall_train/
+
+# Jupyter
+.ipynb_checkpoints/
