@@ -15,8 +15,10 @@ import sys
 import json
 import time
 import hashlib
+import xml.etree.ElementTree as ET
 import numpy as np
 import pandas as pd
+import requests
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
@@ -29,18 +31,31 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
 
 from dotenv import load_dotenv
+
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 from recommendation_engine import get_recommender, CATEGORIES
 from mood_handler import (
-    infer_mood_and_categories, get_full_mood_analysis,
-    EMOJI_MOODS, get_emoji_mood, get_time_period
+    infer_mood_and_categories,
+    get_full_mood_analysis,
+    EMOJI_MOODS,
+    get_emoji_mood,
+    get_time_period,
 )
 from database import (
-    init_db, create_user, get_user, get_all_users,
-    update_user_preferences, add_click, get_click_history,
-    get_click_category_counts, create_session, get_recent_sessions,
-    add_feedback, get_disliked_news, get_user_stats
+    init_db,
+    create_user,
+    get_user,
+    get_all_users,
+    update_user_preferences,
+    add_click,
+    get_click_history,
+    get_click_category_counts,
+    create_session,
+    get_recent_sessions,
+    add_feedback,
+    get_disliked_news,
+    get_user_stats,
 )
 from firebase_config import (
     create_or_update_user as fb_create_user,
@@ -63,30 +78,33 @@ from news_api import (
 
 # ─── Category Metadata ───────────────────────────────────────────────────────
 CATEGORY_INFO = {
-    "news":          {"emoji": "📰", "label": "News",           "color": "#5ac8fa"},
-    "sports":        {"emoji": "⚽", "label": "Sports",         "color": "#30d158"},
-    "finance":       {"emoji": "💰", "label": "Finance",        "color": "#ff9f0a"},
-    "foodanddrink":  {"emoji": "🍕", "label": "Food & Drink",   "color": "#ff9f0a"},
-    "lifestyle":     {"emoji": "✨", "label": "Lifestyle",       "color": "#bf5af2"},
-    "travel":        {"emoji": "✈️", "label": "Travel",          "color": "#64d2ff"},
-    "video":         {"emoji": "🎬", "label": "Video",           "color": "#ff375f"},
-    "weather":       {"emoji": "🌤️", "label": "Weather",        "color": "#64d2ff"},
-    "health":        {"emoji": "❤️", "label": "Health",          "color": "#ff453a"},
-    "autos":         {"emoji": "🚗", "label": "Autos",           "color": "#8e8e93"},
-    "tv":            {"emoji": "📺", "label": "TV",              "color": "#5e5ce6"},
-    "music":         {"emoji": "🎵", "label": "Music",           "color": "#ff375f"},
-    "movies":        {"emoji": "🎥", "label": "Movies",          "color": "#ff375f"},
-    "entertainment": {"emoji": "🎭", "label": "Entertainment",   "color": "#ff375f"},
-    "kids":          {"emoji": "👶", "label": "Kids",             "color": "#ff9f0a"},
-    "middleeast":    {"emoji": "🌍", "label": "Middle East",     "color": "#64d2ff"},
-    "northamerica":  {"emoji": "🌎", "label": "North America",   "color": "#0a84ff"},
+    "news": {"emoji": "📰", "label": "News", "color": "#5ac8fa"},
+    "sports": {"emoji": "⚽", "label": "Sports", "color": "#30d158"},
+    "finance": {"emoji": "💰", "label": "Finance", "color": "#ff9f0a"},
+    "foodanddrink": {"emoji": "🍕", "label": "Food & Drink", "color": "#ff9f0a"},
+    "lifestyle": {"emoji": "✨", "label": "Lifestyle", "color": "#bf5af2"},
+    "travel": {"emoji": "✈️", "label": "Travel", "color": "#64d2ff"},
+    "video": {"emoji": "🎬", "label": "Video", "color": "#ff375f"},
+    "weather": {"emoji": "🌤️", "label": "Weather", "color": "#64d2ff"},
+    "health": {"emoji": "❤️", "label": "Health", "color": "#ff453a"},
+    "autos": {"emoji": "🚗", "label": "Autos", "color": "#8e8e93"},
+    "tv": {"emoji": "📺", "label": "TV", "color": "#5e5ce6"},
+    "music": {"emoji": "🎵", "label": "Music", "color": "#ff375f"},
+    "movies": {"emoji": "🎥", "label": "Movies", "color": "#ff375f"},
+    "entertainment": {"emoji": "🎭", "label": "Entertainment", "color": "#ff375f"},
+    "kids": {"emoji": "👶", "label": "Kids", "color": "#ff9f0a"},
+    "middleeast": {"emoji": "🌍", "label": "Middle East", "color": "#64d2ff"},
+    "northamerica": {"emoji": "🌎", "label": "North America", "color": "#0a84ff"},
 }
+
 
 def get_category_emoji(cat: str) -> str:
     return CATEGORY_INFO.get(cat, {}).get("emoji", "📄")
 
+
 def get_category_label(cat: str) -> str:
     return CATEGORY_INFO.get(cat, {}).get("label", cat.title())
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -129,10 +147,12 @@ for key, val in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
+
 # ─── Load Recommender ────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Loading recommendation engine...")
 def load_engine():
     return get_recommender()
+
 
 models_dir = os.path.join(BASE_DIR, "models")
 if not os.path.exists(os.path.join(models_dir, "news_dict.pkl")):
@@ -161,26 +181,30 @@ def load_past_history():
         nid = click.get("news_id", "")
         if nid and nid not in seen:
             seen.add(nid)
-            all_history.append({
-                "news_id": nid,
-                "title": click.get("news_title", click.get("title", "")),
-                "category": click.get("news_category", click.get("category", "")),
-                "action": click.get("action", "like"),
-                "dwell_time": click.get("dwell_time", 0),
-                "timestamp": click.get("created_at", ""),
-            })
+            all_history.append(
+                {
+                    "news_id": nid,
+                    "title": click.get("news_title", click.get("title", "")),
+                    "category": click.get("news_category", click.get("category", "")),
+                    "action": click.get("action", "like"),
+                    "dwell_time": click.get("dwell_time", 0),
+                    "timestamp": click.get("created_at", ""),
+                }
+            )
     for click in legacy_clicks:
         nid = click.get("news_id", "")
         if nid and nid not in seen:
             seen.add(nid)
-            all_history.append({
-                "news_id": nid,
-                "title": click.get("news_title", ""),
-                "category": click.get("news_category", ""),
-                "action": "like",
-                "dwell_time": click.get("dwell_time_seconds", 0),
-                "timestamp": click.get("clicked_at", ""),
-            })
+            all_history.append(
+                {
+                    "news_id": nid,
+                    "title": click.get("news_title", ""),
+                    "category": click.get("news_category", ""),
+                    "action": "like",
+                    "dwell_time": click.get("dwell_time_seconds", 0),
+                    "timestamp": click.get("clicked_at", ""),
+                }
+            )
 
     st.session_state.all_history = all_history
 
@@ -205,9 +229,12 @@ def load_past_history():
                 engine.bandit.update(uid, cat, reward=0.0)
 
     # Create session record
-    create_session(uid, mood=st.session_state.current_mood,
-                   mood_categories=st.session_state.mood_categories,
-                   time_context=get_time_period(datetime.now().hour))
+    create_session(
+        uid,
+        mood=st.session_state.current_mood,
+        mood_categories=st.session_state.mood_categories,
+        time_context=get_time_period(datetime.now().hour),
+    )
 
     st.session_state.past_history_loaded = True
 
@@ -219,14 +246,16 @@ def load_past_history():
         nid = h["news_id"]
         # Try to get the abstract from the engine's news dict
         news_entry = engine.news_dict.get(nid, {}) if engine.news_dict else {}
-        liked.append({
-            "news_id": nid,
-            "title": h.get("title", "") or news_entry.get("title", ""),
-            "abstract": news_entry.get("abstract", ""),
-            "category": h.get("category", "") or news_entry.get("category", ""),
-            "score": 0,
-            "liked_at": h.get("timestamp", ""),
-        })
+        liked.append(
+            {
+                "news_id": nid,
+                "title": h.get("title", "") or news_entry.get("title", ""),
+                "abstract": news_entry.get("abstract", ""),
+                "category": h.get("category", "") or news_entry.get("category", ""),
+                "score": 0,
+                "liked_at": h.get("timestamp", ""),
+            }
+        )
     # Merge with any already-liked in this session (avoid duplicates)
     existing_ids = {a["news_id"] for a in st.session_state.liked_articles}
     for item in liked:
@@ -234,9 +263,11 @@ def load_past_history():
             st.session_state.liked_articles.append(item)
             existing_ids.add(item["news_id"])
 
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # GOOGLE OAUTH HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
+
 
 def _get_google_client_id() -> str:
     """Get Google OAuth Client ID from environment or secrets."""
@@ -296,6 +327,7 @@ def render_google_signin_button(client_id: str) -> str:
 def decode_google_jwt(credential: str) -> dict:
     """Decode Google JWT to extract user info (without verification for hackathon)."""
     import base64
+
     try:
         # JWT has 3 parts: header.payload.signature
         parts = credential.split(".")
@@ -320,18 +352,23 @@ def decode_google_jwt(credential: str) -> dict:
 # STAGE 1: LOGIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def render_login():
     """Apple-style login page with Google OAuth + email/password."""
     # Hide sidebar on login
-    st.markdown("""
+    st.markdown(
+        """
     <style>
         [data-testid="stSidebar"] { display: none; }
         [data-testid="collapsedControl"] { display: none; }
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     # Hero section
-    st.markdown("""
+    st.markdown(
+        """
     <div class="login-hero">
         <div class="login-hero-glow"></div>
         <div class="login-logo-mark">
@@ -340,7 +377,9 @@ def render_login():
         <div class="login-brand">NewsLens</div>
         <div class="login-tagline-hero">Your news. Intelligently curated.</div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     # ─── Google Sign-In ───────────────────────────────────────────
     google_client_id = _get_google_client_id()
@@ -367,22 +406,34 @@ def render_login():
                     st.rerun()
 
             # Or divider
-            st.markdown("""
+            st.markdown(
+                """
             <div class="auth-divider">
                 <div class="auth-divider-line"></div>
                 <span class="auth-divider-text">or sign in with email</span>
                 <div class="auth-divider-line"></div>
             </div>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
 
         # ─── Email / Password ─────────────────────────────────────
         tab_login, tab_signup = st.tabs(["Sign In", "Create Account"])
 
         with tab_login:
             with st.form("login_form", clear_on_submit=False):
-                email = st.text_input("Email", placeholder="you@example.com", key="login_email")
-                password = st.text_input("Password", type="password", placeholder="Password", key="login_pass")
-                submitted = st.form_submit_button("Sign In", type="primary", use_container_width=True)
+                email = st.text_input(
+                    "Email", placeholder="you@example.com", key="login_email"
+                )
+                password = st.text_input(
+                    "Password",
+                    type="password",
+                    placeholder="Password",
+                    key="login_pass",
+                )
+                submitted = st.form_submit_button(
+                    "Sign In", type="primary", use_container_width=True
+                )
 
                 if submitted and email and password:
                     user = local_login(email, password)
@@ -396,14 +447,27 @@ def render_login():
                             st.session_state.stage = "welcome"
                         st.rerun()
                     else:
-                        st.error("Invalid email or password. Please try again or create an account.")
+                        st.error(
+                            "Invalid email or password. Please try again or create an account."
+                        )
 
         with tab_signup:
             with st.form("signup_form", clear_on_submit=False):
-                name = st.text_input("Full Name", placeholder="John Doe", key="signup_name")
-                email_s = st.text_input("Email", placeholder="you@example.com", key="signup_email")
-                password_s = st.text_input("Password", type="password", placeholder="Create a password (min 6 chars)", key="signup_pass")
-                submitted_s = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+                name = st.text_input(
+                    "Full Name", placeholder="John Doe", key="signup_name"
+                )
+                email_s = st.text_input(
+                    "Email", placeholder="you@example.com", key="signup_email"
+                )
+                password_s = st.text_input(
+                    "Password",
+                    type="password",
+                    placeholder="Create a password (min 6 chars)",
+                    key="signup_pass",
+                )
+                submitted_s = st.form_submit_button(
+                    "Create Account", type="primary", use_container_width=True
+                )
 
                 if submitted_s and name and email_s and password_s:
                     if len(password_s) < 6:
@@ -416,10 +480,13 @@ def render_login():
                             st.session_state.stage = "welcome"
                             st.rerun()
                         else:
-                            st.error("An account with this email already exists. Try signing in.")
+                            st.error(
+                                "An account with this email already exists. Try signing in."
+                            )
 
     # Footer
-    st.markdown("""
+    st.markdown(
+        """
     <div class="login-footer">
         <div class="login-footer-text">
             Powered by Reinforcement Learning · MIND Dataset · 51,282 Articles
@@ -430,27 +497,34 @@ def render_login():
             <span class="footer-badge">⚡ Real-time</span>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STAGE 2: WELCOME
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def render_welcome():
     """Cinematic welcome screen after login."""
-    st.markdown("""
+    st.markdown(
+        """
     <style>
         [data-testid="stSidebar"] { display: none; }
         [data-testid="collapsedControl"] { display: none; }
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     user = st.session_state.auth_user
     display_name = user.get("display_name", "Reader") if user else "Reader"
     first_name = display_name.split()[0] if display_name else "Reader"
 
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div class="welcome-container">
         <div class="welcome-hero-glow"></div>
         <div class="welcome-badge">WELCOME TO NEWSLENS</div>
@@ -477,11 +551,15 @@ def render_welcome():
             </div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     col1, col2, col3 = st.columns([1.3, 1, 1.3])
     with col2:
-        if st.button("Continue", type="primary", use_container_width=True, key="welcome_continue"):
+        if st.button(
+            "Continue", type="primary", use_container_width=True, key="welcome_continue"
+        ):
             st.session_state.stage = "onboarding"
             st.rerun()
 
@@ -490,22 +568,29 @@ def render_welcome():
 # STAGE 3: ONBOARDING — INTEREST SELECTION
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 def render_onboarding():
     """Interest selection screen — pick 3 categories."""
-    st.markdown("""
+    st.markdown(
+        """
     <style>
         [data-testid="stSidebar"] { display: none; }
         [data-testid="collapsedControl"] { display: none; }
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
-    st.markdown("""
+    st.markdown(
+        """
     <div class="onboard-container">
         <div class="onboard-eyebrow">PERSONALIZATION</div>
         <div class="onboard-title">Let's personalize your news.</div>
         <div class="onboard-subtitle">Choose 3 topics you're interested in. We'll use these to start curating your feed.</div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     # Interest selection grid
     selected = st.session_state.selected_interests
@@ -513,7 +598,10 @@ def render_onboarding():
     # Display categories in columns
     display_cats = [c for c in CATEGORIES if c in CATEGORY_INFO]
     cols_per_row = 5
-    rows = [display_cats[i:i + cols_per_row] for i in range(0, len(display_cats), cols_per_row)]
+    rows = [
+        display_cats[i : i + cols_per_row]
+        for i in range(0, len(display_cats), cols_per_row)
+    ]
 
     for row_cats in rows:
         cols = st.columns(cols_per_row)
@@ -524,20 +612,26 @@ def render_onboarding():
 
                 # Styled card
                 if is_selected:
-                    st.markdown(f"""
+                    st.markdown(
+                        f"""
                     <div class="interest-chip selected">
                         <div class="interest-chip-emoji">{info['emoji']}</div>
                         <div class="interest-chip-label" style="color: #0a84ff;">{info['label']}</div>
                         <div class="interest-chip-check">✓</div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """,
+                        unsafe_allow_html=True,
+                    )
                 else:
-                    st.markdown(f"""
+                    st.markdown(
+                        f"""
                     <div class="interest-chip">
                         <div class="interest-chip-emoji">{info['emoji']}</div>
                         <div class="interest-chip-label">{info['label']}</div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """,
+                        unsafe_allow_html=True,
+                    )
 
                 # Toggle button
                 btn_text = "Remove" if is_selected else "Select"
@@ -547,12 +641,16 @@ def render_onboarding():
                     elif len(selected) < 3:
                         st.session_state.selected_interests.append(cat)
                     else:
-                        st.toast("You can select up to 3 interests. Remove one first.", icon="⚠️")
+                        st.toast(
+                            "You can select up to 3 interests. Remove one first.",
+                            icon="⚠️",
+                        )
                     st.rerun()
 
     # Counter and submit
     num_selected = len(st.session_state.selected_interests)
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div class="selection-status">
         <div class="selection-dots">
             <span class="sel-dot {'active' if num_selected >= 1 else ''}"></span>
@@ -564,12 +662,19 @@ def render_onboarding():
             <span style="color: #86868b;"> of 3 selected</span>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     col1, col2, col3 = st.columns([1.3, 1, 1.3])
     with col2:
         if num_selected == 3:
-            if st.button("Start Reading →", type="primary", use_container_width=True, key="start_reading"):
+            if st.button(
+                "Start Reading →",
+                type="primary",
+                use_container_width=True,
+                key="start_reading",
+            ):
                 uid = st.session_state.current_user_id
                 interests = st.session_state.selected_interests
 
@@ -609,14 +714,19 @@ def render_onboarding():
                 st.session_state.page = "📰 Feed"
                 st.rerun()
         else:
-            st.button("Select 3 topics to continue", disabled=True, use_container_width=True)
+            st.button(
+                "Select 3 topics to continue", disabled=True, use_container_width=True
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STAGE 4: DASHBOARD
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def render_news_card(article: dict, show_signals: bool = False, show_actions: bool = True, idx: int = 0):
+
+def render_news_card(
+    article: dict, show_signals: bool = False, show_actions: bool = True, idx: int = 0
+):
     """Render an Apple-style news card."""
     cat = article.get("category", "news")
     cat_class = cat if cat in CATEGORY_INFO else "default"
@@ -629,7 +739,9 @@ def render_news_card(article: dict, show_signals: bool = False, show_actions: bo
             if sig_name in ("cold_start",):
                 continue
             width = min(float(sig_val) * 100, 100)
-            sig_class = sig_name if sig_name in ("rl", "content", "collab", "mood") else "rl"
+            sig_class = (
+                sig_name if sig_name in ("rl", "content", "collab", "mood") else "rl"
+            )
             signal_html += f"""
             <div class="signal-bar">
                 <span class="signal-label">{sig_name}</span>
@@ -671,8 +783,14 @@ def render_news_card(article: dict, show_signals: bool = False, show_actions: bo
                     st.rerun()
         else:
             st.markdown("---")
-            st.info(f"**{article.get('title')}**\n\n{article.get('abstract', 'No content available.')}\n\n*(Full article text)*")
-            if st.button("✅ Done Reading", key=f"done_{article['news_id']}_{idx}", type="primary"):
+            st.info(
+                f"**{article.get('title')}**\n\n{article.get('abstract', 'No content available.')}\n\n*(Full article text)*"
+            )
+            if st.button(
+                "✅ Done Reading",
+                key=f"done_{article['news_id']}_{idx}",
+                type="primary",
+            ):
                 start = st.session_state.get(timer_key, time.time())
                 dwell = time.time() - start
                 st.session_state[read_key] = False
@@ -683,12 +801,18 @@ def render_news_card(article: dict, show_signals: bool = False, show_actions: bo
                 time_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
 
                 if dwell > 5.0:
-                    st.toast(f"📈 Deep read ({time_str}) — AI boosting {cat}!", icon="🧠")
-                    st.success(f"⏱️ You spent **{time_str}** reading this article. Your preferences have been updated!")
+                    st.toast(
+                        f"📈 Deep read ({time_str}) — AI boosting {cat}!", icon="🧠"
+                    )
+                    st.success(
+                        f"⏱️ You spent **{time_str}** reading this article. Your preferences have been updated!"
+                    )
                     handle_click(article, "like", dwell_time=dwell)
                 else:
                     st.toast(f"Quick glance ({time_str}) — noted.", icon="⏱️")
-                    st.info(f"⏱️ Quick read: **{time_str}**. Spend more time for stronger personalization.")
+                    st.info(
+                        f"⏱️ Quick read: **{time_str}**. Spend more time for stronger personalization."
+                    )
                     handle_click(article, "glance", dwell_time=dwell)
                 st.rerun()
 
@@ -714,11 +838,18 @@ def handle_click(article: dict, feedback_type: str = "like", dwell_time: float =
         engine.bandit.update(uid, cat, reward=reward * 0.5)
 
     # Save to both databases
-    add_click(uid, article["news_id"], article.get("title", ""),
-              cat, dwell_time=dwell_time)
+    add_click(
+        uid, article["news_id"], article.get("title", ""), cat, dwell_time=dwell_time
+    )
     add_feedback(uid, article["news_id"], feedback_type)
-    save_click_event(uid, article["news_id"], article.get("title", ""),
-                     cat, feedback_type, dwell_time)
+    save_click_event(
+        uid,
+        article["news_id"],
+        article.get("title", ""),
+        cat,
+        feedback_type,
+        dwell_time,
+    )
 
     click_record = {
         "news_id": article["news_id"],
@@ -738,14 +869,17 @@ def handle_click(article: dict, feedback_type: str = "like", dwell_time: float =
         # Avoid duplicates
         existing_ids = [a["news_id"] for a in st.session_state.liked_articles]
         if article["news_id"] not in existing_ids:
-            st.session_state.liked_articles.insert(0, {
-                "news_id": article["news_id"],
-                "title": article.get("title", ""),
-                "abstract": article.get("abstract", ""),
-                "category": article.get("category", ""),
-                "score": article.get("score", 0),
-                "liked_at": datetime.now().isoformat(),
-            })
+            st.session_state.liked_articles.insert(
+                0,
+                {
+                    "news_id": article["news_id"],
+                    "title": article.get("title", ""),
+                    "abstract": article.get("abstract", ""),
+                    "category": article.get("category", ""),
+                    "score": article.get("score", 0),
+                    "liked_at": datetime.now().isoformat(),
+                },
+            )
 
     # NOTE: Recommendations are NOT cleared here so "Done Reading" keeps the feed intact.
     # They will be refreshed only when the user explicitly clicks "Get Recommendations".
@@ -756,6 +890,7 @@ def handle_click(article: dict, feedback_type: str = "like", dwell_time: float =
     if feedback_type == "like":
         st.toast(f"Liked: {article.get('title', '')[:50]}...", icon="👍")
 
+
 def handle_skip(article: dict):
     """Handle skip — negative RL signal."""
     uid = st.session_state.current_user_id
@@ -764,12 +899,19 @@ def handle_skip(article: dict):
 
     engine.record_skip(uid, article["news_id"])
     add_feedback(uid, article["news_id"], "not_interested")
-    save_click_event(uid, article["news_id"], article.get("title", ""),
-                     article.get("category", ""), "skip", 0)
+    save_click_event(
+        uid,
+        article["news_id"],
+        article.get("title", ""),
+        article.get("category", ""),
+        "skip",
+        0,
+    )
 
     if "recommendations" in st.session_state:
         st.session_state.recommendations = [
-            r for r in st.session_state.recommendations
+            r
+            for r in st.session_state.recommendations
             if r["news_id"] != article["news_id"]
         ]
 
@@ -808,12 +950,14 @@ def generate_recs():
         )
 
     st.session_state.rec_latency = (time.time() - start) * 1000
-    st.session_state.recommendation_history.append({
-        "timestamp": datetime.now().isoformat(),
-        "num_recs": len(recs),
-        "latency_ms": st.session_state.rec_latency,
-        "mood": st.session_state.current_mood,
-    })
+    st.session_state.recommendation_history.append(
+        {
+            "timestamp": datetime.now().isoformat(),
+            "num_recs": len(recs),
+            "latency_ms": st.session_state.rec_latency,
+            "mood": st.session_state.current_mood,
+        }
+    )
 
     return recs
 
@@ -837,7 +981,8 @@ def render_dashboard():
 
         provider_badge = "🔐 Google" if auth_provider == "google" else "📧 Email"
 
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="user-badge">
             {avatar_html}
             <div class="user-info">
@@ -846,16 +991,27 @@ def render_dashboard():
                 <div class="user-provider">{provider_badge}</div>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
-        st.markdown("""
+        st.markdown(
+            """
         <div style="text-align: center; padding: 4px 0 16px;">
             <div style="font-size: 1.4rem; font-weight: 800; color: #f5f5f7; letter-spacing: -0.03em;">📰 NewsLens</div>
             <div style="font-size: 0.7rem; color: #48484a; letter-spacing: 0.05em; text-transform: uppercase;">Personalized for you</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
-        nav_options = ["🏠 Dashboard", "📰 Feed", "❤️ Liked", "👤 Profile", "📊 Analytics"]
+        nav_options = [
+            "🏠 Dashboard",
+            "📰 Feed",
+            "❤️ Liked",
+            "👤 Profile",
+            "📊 Analytics",
+        ]
         if is_news_api_configured():
             nav_options.insert(2, "🔴 Live News")
         page = st.radio(
@@ -874,13 +1030,16 @@ def render_dashboard():
             _s_start = st.session_state.get("session_start_index", 0)
             clicks = max(0, len(st.session_state.session_clicks) - _s_start)
 
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div style="padding: 0 4px;">
                 <div style="font-size: 0.7rem; color: #48484a; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 8px;">Session</div>
                 <div style="font-size: 0.85rem; color: #86868b; margin-bottom: 4px;">📊 {clicks} interactions</div>
                 <div style="font-size: 0.85rem; color: #86868b; margin-bottom: 4px;">⚡ {st.session_state.rec_latency:.0f}ms latency</div>
             </div>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
 
         st.markdown("---")
 
@@ -889,12 +1048,15 @@ def render_dashboard():
                 del st.session_state[key]
             st.rerun()
 
-        st.markdown("""
+        st.markdown(
+            """
         <div style="text-align: center; padding: 16px 0; color: #48484a; font-size: 0.65rem; letter-spacing: 0.02em;">
             <div>Powered by MIND Dataset</div>
             <div>51,282 Articles · RL Engine</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
     # ─── Load past history from database on login ─────────────────
     load_past_history()
@@ -926,7 +1088,219 @@ def render_dashboard():
 
 # ─── PAGE: DASHBOARD ─────────────────────────────────────────────────────────
 
-def render_page_dashboard():
+# Initialise dashboard sub-tab state
+if "dashboard_tab" not in st.session_state:
+    st.session_state.dashboard_tab = "live"  # "live" | "recs"
+
+
+def _render_live_context_tab():
+    """Dashboard tab: real-time GPS, weather, AQI and local news — styled to match app aesthetic."""
+
+    # Section header
+    st.markdown(
+        """
+    <div class="nl-section-header">
+        <span class="nl-section-icon">📍</span>
+        <div>
+            <div class="nl-section-title">Live Context: Location</div>
+            <div class="nl-section-sub">Real-time environment &amp; personalization signals</div>
+        </div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Pinging status ─────────────────────────────────────────────
+    st.markdown(
+        """
+    <div class="nl-ping-row">
+        <span>📡</span>
+        <span>Pinging location, weather &amp; AQI servers…</span>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # ── IP-based location (reliable server-side; iPhone GPS needs HTTPS context) ──
+    try:
+        ip_data = requests.get("http://ip-api.com/json/", timeout=4).json()
+        lat = float(ip_data["lat"])
+        lon = float(ip_data["lon"])
+        city = ip_data.get("city", "Unknown")
+        country = ip_data.get("country", "India")
+        loc_ok = True
+    except Exception:
+        lat, lon = 31.7119, 76.9327
+        city, country = "Mandi", "India"
+        loc_ok = False
+
+    st.session_state["user_location"] = f"{city}, {country}"
+
+    # Detected badge
+    badge_color = "#30d158" if loc_ok else "#ff9f0a"
+    badge_icon = "📍" if loc_ok else "⚠️"
+    st.markdown(
+        f"""
+    <div style="display:inline-flex;align-items:center;gap:6px;
+        background:rgba(48,209,88,0.10);border:1px solid rgba(48,209,88,0.22);
+        border-radius:20px;padding:5px 14px;font-size:0.78rem;
+        font-weight:600;color:{badge_color};margin-bottom:16px;">
+        {badge_icon}&nbsp; <span style="color:#aeaeb2;">Detected:</span>&nbsp;{city}, {country}
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Live Weather ───────────────────────────────────────────────
+    try:
+        w = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={"latitude": lat, "longitude": lon, "current_weather": "true"},
+            timeout=4,
+        ).json()
+        temp_c = float(w["current_weather"]["temperature"])
+        windspeed = float(w["current_weather"]["windspeed"])
+        temp_display = f"{int(round(temp_c))}"
+    except Exception:
+        temp_c, windspeed, temp_display = 21.0, 0.0, "21"
+
+    # ── Live AQI ───────────────────────────────────────────────────
+    try:
+        aq = requests.get(
+            "https://air-quality-api.open-meteo.com/v1/air-quality",
+            params={"latitude": lat, "longitude": lon, "current": "us_aqi"},
+            timeout=4,
+        ).json()
+        current_aqi = int(aq["current"]["us_aqi"])
+    except Exception:
+        current_aqi = 41
+
+    st.session_state["user_temp"] = f"{temp_display}°C"
+    st.session_state["user_aqi"] = current_aqi
+
+    # ── Two-column layout: metrics+AI left, map+news right ─────────
+    info_col, map_col = st.columns([1, 1.8])
+
+    with info_col:
+        # Metric grid — styled cards
+        st.markdown(
+            f"""
+        <div class="nl-metric-grid">
+            <div class="nl-metric-card">
+                <div class="nl-metric-label">Latitude</div>
+                <div class="nl-metric-value">{lat:.3f}</div>
+            </div>
+            <div class="nl-metric-card">
+                <div class="nl-metric-label">Longitude</div>
+                <div class="nl-metric-value">{lon:.3f}</div>
+            </div>
+            <div class="nl-metric-card">
+                <div class="nl-metric-label">🌡️ Temp</div>
+                <div class="nl-metric-value">{temp_display}<span class="nl-metric-unit">°C</span></div>
+            </div>
+            <div class="nl-metric-card">
+                <div class="nl-metric-label">🫁 AQI</div>
+                <div class="nl-metric-value">{current_aqi}</div>
+            </div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+        if windspeed:
+            st.markdown(
+                f'<div style="font-size:0.75rem;color:#636366;margin:-6px 0 10px 2px;">💨 Wind: {windspeed} km/h</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── AI Contextual Suggestion ───────────────────────────────
+        if current_aqi > 150:
+            box_cls = "bad"
+            ai_icon = "🚫"
+            ai_title = f"Hazardous Air Quality (AQI: {current_aqi})"
+            ai_body = f"Pollution in <strong>{city}</strong> is dangerously high today."
+            ai_sugg = (
+                "Stay indoors. We've prioritised long-form and indoor lifestyle reads."
+            )
+        elif current_aqi > 100:
+            box_cls = "warn"
+            ai_icon = "⚠️"
+            ai_title = f"Poor Air Quality Alert (AQI: {current_aqi})"
+            ai_body = f"The pollution levels in <strong>{city}</strong> are high today."
+            ai_sugg = "It's highly recommended to stay indoors! Grab a coffee and settle in — we've prioritised long-form reading and indoor lifestyle articles in your feed today."
+        elif temp_c < 10:
+            box_cls = "cold"
+            ai_icon = "❄️"
+            ai_title = f"Chilly Weather Alert ({temp_display}°C)"
+            ai_body = f"The air is clean (AQI: {current_aqi}) in <strong>{city}</strong>, but it's cold outside!"
+            ai_sugg = "Stay warm inside. We're recommending cosy lifestyle, tech, and entertainment news for you."
+        else:
+            box_cls = "good"
+            ai_icon = "☀️"
+            ai_title = f"Beautiful Day in {city}!"
+            ai_body = f"It's a lovely {temp_display}°C with great air quality (AQI: {current_aqi})."
+            ai_sugg = "Take a break, go for a walk outside, and listen to some quick sports or entertainment updates on the go!"
+
+        st.markdown(
+            f"""
+        <div class="nl-ai-box {box_cls}">
+            <div class="nl-ai-title">{ai_icon} {ai_title}</div>
+            <div class="nl-ai-body">{ai_body}</div>
+            <div class="nl-ai-suggestion"><strong>AI Suggestion:</strong> {ai_sugg}</div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+    with map_col:
+        # Dark-themed map
+        map_df = pd.DataFrame({"lat": [lat], "lon": [lon]})
+        st.map(map_df, zoom=9, use_container_width=True)
+
+        st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+        # ── Live Local News ────────────────────────────────────────
+        st.markdown(
+            f"""
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+            <span style="font-size:1.1rem;">📰</span>
+            <span style="font-size:1.0rem;font-weight:700;color:#f5f5f7;">Live Update: {city}</span>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+
+        try:
+            rss = requests.get(
+                f"https://news.google.com/rss/search?q={city}+news&hl=en-IN&gl=IN&ceid=IN:en",
+                timeout=5,
+            )
+            root = ET.fromstring(rss.content)
+            items = root.findall(".//item")[:3]
+            if items:
+                for item in items:
+                    n_title = (item.find("title").text or "").strip()
+                    n_link = (item.find("link").text or "#").strip()
+                    n_date = (item.find("pubDate").text or "").strip()
+                    clean = " ".join(n_date.split()[:4])
+                    st.markdown(
+                        f"""
+                    <div class="nl-news-item">
+                        <div class="nl-news-tag">🚨 Top Story in {city} right now</div>
+                        <div class="nl-news-title"><a href="{n_link}" target="_blank">{n_title}</a></div>
+                        <div class="nl-news-date">Published: {clean}</div>
+                    </div>
+                    """,
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.info(f"No major stories found for {city} right now.")
+        except Exception:
+            st.warning("📡 Could not reach news servers (offline / firewall).")
+
+
+def _render_recommendations_tab():
+    """Recommendations tab: the existing dashboard personalization UI."""
     user = st.session_state.auth_user
     display_name = user.get("display_name", "Reader") if user else "Reader"
     first_name = display_name.split()[0] if display_name else "Reader"
@@ -940,38 +1314,37 @@ def render_page_dashboard():
     else:
         greeting = "Good evening"
 
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div style="margin-bottom: 8px;">
-        <div style="font-size: 0.8rem; color: #48484a; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 4px;">
-            {greeting}
-        </div>
+        <div style="font-size: 0.8rem; color: #48484a; text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: 4px;">{greeting}</div>
         <h1 style="margin: 0; font-size: 2.5rem !important;">{first_name}'s Dashboard</h1>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     uid = st.session_state.current_user_id
     profile = engine.get_user_profile_summary(uid)
 
-    # ── Articles Read: read from database so it persists after refresh/re-login
+    # ── Articles Read: from database so it persists after refresh/re-login ──
     db_stats = get_user_stats(uid)
     total_clicks = db_stats.get("total_clicks", 0) if db_stats else 0
     if total_clicks == 0 and profile:
         total_clicks = profile.get("total_clicks", 0)
 
-    # ── This Session: only NEW clicks added after history was loaded on login
+    # ── This Session: only NEW clicks added after history loaded on login ──
     session_start = st.session_state.get("session_start_index", 0)
     session_clicks = max(0, len(st.session_state.session_clicks) - session_start)
 
-    user_type = "Active Reader" if total_clicks >= 5 else "New Reader"
     time_period = get_time_period(hour)
-
-    # Context bar
     current_mood = st.session_state.current_mood
     top_cat = "news"
     if profile and profile.get("top_categories"):
         top_cat = profile["top_categories"][0][0]
 
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div class="context-bar">
         <div class="context-card">
             <div class="context-value">{current_mood.title()}</div>
@@ -994,7 +1367,9 @@ def render_page_dashboard():
             <div class="context-label">This Session</div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
 
@@ -1005,27 +1380,29 @@ def render_page_dashboard():
         if profile and profile.get("category_dist"):
             cat_data = profile["category_dist"]
             sorted_cats = sorted(cat_data.items(), key=lambda x: x[1], reverse=True)
-
-            pref_html = ""
             max_val = max(v for _, v in sorted_cats) if sorted_cats else 1
+            pref_html = ""
             for cat, val in sorted_cats[:8]:
                 pct = (val / max_val) * 100 if max_val > 0 else 0
                 emoji = get_category_emoji(cat)
                 pref_html += f"""
                 <div class="pref-bar">
                     <span class="pref-label">{emoji} {cat}</span>
-                    <div class="pref-track">
-                        <div class="pref-fill" style="width: {pct}%"></div>
-                    </div>
+                    <div class="pref-track"><div class="pref-fill" style="width:{pct}%"></div></div>
                     <span class="pref-percent">{val:.1%}</span>
                 </div>"""
             st.markdown(pref_html, unsafe_allow_html=True)
         else:
-            interests = st.session_state.auth_user.get("interests", []) if st.session_state.auth_user else []
+            interests = (
+                st.session_state.auth_user.get("interests", [])
+                if st.session_state.auth_user
+                else []
+            )
             if interests:
                 for cat in interests:
-                    emoji = get_category_emoji(cat)
-                    st.markdown(f"- {emoji} **{get_category_label(cat)}**")
+                    st.markdown(
+                        f"- {get_category_emoji(cat)} **{get_category_label(cat)}**"
+                    )
             else:
                 st.info("Start reading articles to build your preference profile!")
 
@@ -1036,63 +1413,132 @@ def render_page_dashboard():
             if cat_data:
                 cats = list(cat_data.keys())[:8]
                 vals = [cat_data[c] for c in cats]
-
-                fig = go.Figure(data=go.Scatterpolar(
-                    r=vals + [vals[0]],
-                    theta=[c.title() for c in cats] + [cats[0].title()],
-                    fill='toself',
-                    fillcolor='rgba(10, 132, 255, 0.12)',
-                    line=dict(color='#0a84ff', width=2),
-                ))
+                fig = go.Figure(
+                    data=go.Scatterpolar(
+                        r=vals + [vals[0]],
+                        theta=[c.title() for c in cats] + [cats[0].title()],
+                        fill="toself",
+                        fillcolor="rgba(10, 132, 255, 0.12)",
+                        line=dict(color="#0a84ff", width=2),
+                    )
+                )
                 fig.update_layout(
                     polar=dict(
-                        bgcolor='rgba(0,0,0,0)',
-                        radialaxis=dict(visible=True, range=[0, max(vals) * 1.2],
-                                       showticklabels=False, gridcolor='rgba(255,255,255,0.04)'),
-                        angularaxis=dict(gridcolor='rgba(255,255,255,0.04)',
-                                         linecolor='rgba(255,255,255,0.04)'),
+                        bgcolor="rgba(0,0,0,0)",
+                        radialaxis=dict(
+                            visible=True,
+                            range=[0, max(vals) * 1.2],
+                            showticklabels=False,
+                            gridcolor="rgba(255,255,255,0.04)",
+                        ),
+                        angularaxis=dict(
+                            gridcolor="rgba(255,255,255,0.04)",
+                            linecolor="rgba(255,255,255,0.04)",
+                        ),
                     ),
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#86868b', family='Inter'),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#86868b", family="Inter"),
                     showlegend=False,
                     margin=dict(l=40, r=40, t=20, b=40),
                     height=300,
                 )
                 st.plotly_chart(fig, use_container_width=True)
         else:
-            st.markdown("""
-            <div class="stat-card" style="margin-top: 20px;">
-                <div class="stat-number">🆕</div>
-                <div class="stat-label">New User — Cold Start<br>
-                <span style="font-size: 0.65rem; color: #48484a;">Head to the Feed to start reading!</span>
+            st.markdown(
+                """
+            <div style="text-align:center; padding:20px 0; color:#86868b; font-size:0.85rem;">
+                Start reading articles on the Feed to build your AI profile.
+            </div>
+            """,
+                unsafe_allow_html=True,
+            )
+
+    # ── Recommendations: cold-start for new users, personalized for returning ──
+    st.markdown("---")
+    is_new_user = total_clicks == 0 and not st.session_state.session_clicks
+
+    if is_new_user:
+        # ── COLD START: brand-new user with zero history ───────────
+        interests = (
+            st.session_state.auth_user.get("interests", [])
+            if st.session_state.auth_user
+            else []
+        )
+        st.markdown("### 🚀 Your Starter Feed")
+        interest_tags = (
+            ", ".join(get_category_emoji(c) + " " + c for c in interests)
+            if interests
+            else "general topics"
+        )
+        st.markdown(
+            f"""
+        <div style="background: linear-gradient(135deg, rgba(10,132,255,0.08), rgba(94,92,230,0.08));
+                    border: 1px solid rgba(10,132,255,0.2); border-radius: 16px;
+                    padding: 20px 24px; margin-bottom: 20px;">
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px;">
+                <span style="font-size: 1.5rem;">❄️</span>
+                <div>
+                    <div style="font-size: 0.95rem; font-weight: 700; color: #f5f5f7;">Cold Start — Warming Up</div>
+                    <div style="font-size: 0.78rem; color: #86868b; margin-top: 2px;">
+                        No reading history yet. Articles picked from your interests:
+                        <strong style="color:#0a84ff;">{interest_tags}</strong>
+                    </div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
-
-    # ── Recommendations — always shown ────────────────────────────
-    if st.session_state.recommendations:
-        st.markdown("---")
-        st.markdown("### Recommended for You")
-        top_recs = st.session_state.recommendations[:10]
-        cols = st.columns(2)
-        for idx, article in enumerate(top_recs):
-            with cols[idx % 2]:
-                render_news_card(article, show_signals=False, show_actions=True, idx=idx)
-    else:
-        st.markdown("---")
-        st.markdown("""
-        <div style="text-align:center; padding: 30px 0;">
-            <div style="font-size:1.4rem; margin-bottom:8px;">📰</div>
-            <div style="color:#86868b;">Go to <strong style="color:#0a84ff;">Feed</strong> to refresh your recommendations.</div>
+            <div style="font-size: 0.75rem; color: #48484a; border-top: 1px solid #2c2c2e;
+                        padding-top: 10px; margin-top: 4px;">
+                💡 The more you read and like, the smarter your feed becomes.
+            </div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
-    # ─── All History (from database, persists across sessions) ────
+        cold_recs = st.session_state.recommendations
+        if not cold_recs:
+            cold_recs = engine.get_cold_start_recommendations(
+                preferred_categories=(
+                    [c.lower() for c in interests] if interests else None
+                ),
+                num_recommendations=10,
+            )
+            st.session_state.recommendations = cold_recs
+
+        if cold_recs:
+            cols = st.columns(2)
+            for idx, article in enumerate(cold_recs[:10]):
+                with cols[idx % 2]:
+                    render_news_card(
+                        article, show_signals=False, show_actions=True, idx=idx
+                    )
+        else:
+            st.info("Head to the **Feed** page to load your starter articles.")
+
+    else:
+        # ── PERSONALIZED: returning user with history ──────────────
+        if st.session_state.recommendations:
+            st.markdown("### Recommended for You")
+            top_recs = st.session_state.recommendations[:10]
+            cols = st.columns(2)
+            for idx, article in enumerate(top_recs):
+                with cols[idx % 2]:
+                    render_news_card(
+                        article, show_signals=False, show_actions=True, idx=idx
+                    )
+        else:
+            st.markdown(
+                """
+            <div style="text-align:center;padding:30px 0;">
+                <div style="font-size:1.4rem;margin-bottom:8px;">📰</div>
+                <div style="color:#86868b;">Go to <strong style="color:#0a84ff;">Feed</strong> to refresh your recommendations.</div>
+            </div>""",
+                unsafe_allow_html=True,
+            )
+
+    # Recent activity
     st.markdown("---")
     st.markdown("### Recent Activity")
-
-    # Combine session + past history
     all_activity = st.session_state.all_history
     if all_activity:
         for click in all_activity[:15]:
@@ -1102,42 +1548,275 @@ def render_page_dashboard():
             action = click.get("action", "")
             dwell = click.get("dwell_time", 0)
             ts = click.get("timestamp", "")
-
-            # Format action badge
-            if action == "like":
-                action_badge = "👍"
-            elif action == "skip" or action == "not_interested":
-                action_badge = "👎"
-            elif action == "glance":
-                action_badge = "👁️"
-            else:
-                action_badge = "📖"
-
-            # Format dwell time
+            action_badge = {
+                "like": "👍",
+                "skip": "👎",
+                "not_interested": "👎",
+                "glance": "👁️",
+            }.get(action, "📖")
             dwell_str = ""
             if dwell and float(dwell) > 0:
                 d = float(dwell)
-                dwell_str = f" · ⏱️ {int(d//60)}m {int(d%60)}s" if d >= 60 else f" · ⏱️ {int(d)}s"
-
-            # Format timestamp
+                dwell_str = (
+                    f" · ⏱️ {int(d//60)}m {int(d%60)}s"
+                    if d >= 60
+                    else f" · ⏱️ {int(d)}s"
+                )
             time_str = ""
             if ts:
                 try:
-                    dt = datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
+                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
                     time_str = f" · {dt.strftime('%b %d, %I:%M %p')}"
                 except Exception:
                     pass
-
-            st.markdown(f"- {action_badge} {emoji} **{title}...** ({cat}){dwell_str}{time_str}")
+            st.markdown(
+                f"- {action_badge} {emoji} **{title}...** ({cat}){dwell_str}{time_str}"
+            )
     else:
         st.info("No activity yet. Start reading articles to build your history!")
 
 
+def render_page_dashboard():
+    """Dashboard with a polished top-right horizontal navbar: Dashboard | Recommendations."""
+
+    # ── Global navbar CSS ──────────────────────────────────────────
+    st.markdown(
+        """
+    <style>
+    /* ── Horizontal top-right navbar ─────────────────────────────── */
+    .nl-navbar {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 6px;
+        padding: 0 2px 16px 2px;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        margin-bottom: 28px;
+    }
+    .nl-navbar-label {
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #48484a;
+        margin-right: 8px;
+    }
+    /* Streamlit button reset for navbar pills */
+    .nl-navbar .stButton > button {
+        font-size: 0.8rem !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.02em !important;
+        padding: 5px 20px !important;
+        border-radius: 999px !important;
+        border: 1px solid rgba(255,255,255,0.10) !important;
+        background: transparent !important;
+        color: #86868b !important;
+        transition: all 0.18s ease !important;
+        white-space: nowrap !important;
+        min-width: 0 !important;
+        height: auto !important;
+        line-height: 1.4 !important;
+    }
+    .nl-navbar .stButton > button:hover {
+        background: rgba(255,255,255,0.05) !important;
+        color: #f5f5f7 !important;
+        border-color: rgba(255,255,255,0.20) !important;
+    }
+    /* Active pill — injected via a wrapper div class */
+    .nl-pill-active .stButton > button {
+        background: rgba(10,132,255,0.18) !important;
+        color: #3b9eff !important;
+        border-color: rgba(10,132,255,0.40) !important;
+        box-shadow: 0 0 0 1px rgba(10,132,255,0.25) !important;
+    }
+    .nl-pill-active .stButton > button:hover {
+        background: rgba(10,132,255,0.28) !important;
+        color: #5aafff !important;
+    }
+    /* Section heading row */
+    .nl-section-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 6px;
+    }
+    .nl-section-icon {
+        font-size: 1.4rem;
+        line-height: 1;
+    }
+    .nl-section-title {
+        font-size: 1.55rem;
+        font-weight: 800;
+        color: #f5f5f7;
+        letter-spacing: -0.02em;
+    }
+    .nl-section-sub {
+        font-size: 0.78rem;
+        color: #48484a;
+        margin-top: 2px;
+    }
+    /* Metric cards */
+    .nl-metric-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin: 14px 0;
+    }
+    .nl-metric-card {
+        background: rgba(255,255,255,0.04);
+        border: 1px solid rgba(255,255,255,0.07);
+        border-radius: 14px;
+        padding: 14px 16px;
+    }
+    .nl-metric-label {
+        font-size: 0.72rem;
+        color: #636366;
+        letter-spacing: 0.02em;
+        margin-bottom: 4px;
+    }
+    .nl-metric-value {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: #f5f5f7;
+        letter-spacing: -0.02em;
+        line-height: 1.1;
+    }
+    .nl-metric-unit {
+        font-size: 0.9rem;
+        color: #86868b;
+        font-weight: 500;
+    }
+    /* AI suggestion box */
+    .nl-ai-box {
+        border-radius: 14px;
+        padding: 14px 16px;
+        margin-top: 14px;
+        border: 1px solid transparent;
+    }
+    .nl-ai-box.good {
+        background: rgba(48,209,88,0.08);
+        border-color: rgba(48,209,88,0.20);
+    }
+    .nl-ai-box.warn {
+        background: rgba(255,159,10,0.08);
+        border-color: rgba(255,159,10,0.20);
+    }
+    .nl-ai-box.bad {
+        background: rgba(255,69,58,0.08);
+        border-color: rgba(255,69,58,0.20);
+    }
+    .nl-ai-box.cold {
+        background: rgba(100,210,255,0.08);
+        border-color: rgba(100,210,255,0.20);
+    }
+    .nl-ai-title { font-size:0.88rem; font-weight:700; color:#f5f5f7; margin-bottom:6px; }
+    .nl-ai-body  { font-size:0.80rem; color:#aeaeb2; line-height:1.55; margin-bottom:8px; }
+    .nl-ai-suggestion { font-size:0.78rem; color:#86868b; }
+    .nl-ai-suggestion strong { color:#3b9eff; }
+    /* Detect badge */
+    .nl-detect-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: rgba(48,209,88,0.12);
+        border: 1px solid rgba(48,209,88,0.25);
+        border-radius: 20px;
+        padding: 4px 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #30d158;
+        margin-bottom: 14px;
+    }
+    /* News story cards */
+    .nl-news-item {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 12px;
+        padding: 12px 14px;
+        margin-bottom: 8px;
+    }
+    .nl-news-tag {
+        font-size: 0.65rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #ff453a;
+        margin-bottom: 4px;
+    }
+    .nl-news-title { font-size:0.85rem; font-weight:600; color:#f5f5f7; line-height:1.4; }
+    .nl-news-title a { color:#3b9eff !important; text-decoration:none; }
+    .nl-news-title a:hover { text-decoration:underline; }
+    .nl-news-date { font-size:0.7rem; color:#636366; margin-top:4px; }
+    /* Pinging row */
+    .nl-ping-row {
+        display:flex; align-items:center; gap:8px;
+        background: rgba(10,132,255,0.07);
+        border: 1px solid rgba(10,132,255,0.15);
+        border-radius: 10px;
+        padding: 10px 14px;
+        margin-bottom: 12px;
+        font-size:0.8rem; color:#3b9eff;
+    }
+    </style>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Navbar row ─────────────────────────────────────────────────
+    active = st.session_state.dashboard_tab
+    nav_col, btn1_wrap, btn2_wrap = st.columns([6, 1, 1.2])
+
+    with nav_col:
+        st.markdown(
+            '<div style="height:38px;display:flex;align-items:center;">'
+            '<span style="font-size:0.68rem;font-weight:700;letter-spacing:0.12em;'
+            'text-transform:uppercase;color:#48484a;">View</span></div>',
+            unsafe_allow_html=True,
+        )
+
+    with btn1_wrap:
+        cls1 = "nl-pill-active" if active == "live" else ""
+        st.markdown(
+            f'<div class="nl-navbar {cls1}" style="padding:0;border:none;margin:0;">',
+            unsafe_allow_html=True,
+        )
+        if st.button("🌍 Dashboard", key="nb_live", use_container_width=True):
+            st.session_state.dashboard_tab = "live"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with btn2_wrap:
+        cls2 = "nl-pill-active" if active == "recs" else ""
+        st.markdown(
+            f'<div class="nl-navbar {cls2}" style="padding:0;border:none;margin:0;">',
+            unsafe_allow_html=True,
+        )
+        if st.button("📰 Recommendations", key="nb_recs", use_container_width=True):
+            st.session_state.dashboard_tab = "recs"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown(
+        '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.06);margin:0 0 28px 0;">',
+        unsafe_allow_html=True,
+    )
+
+    # ── Route to correct tab ───────────────────────────────────────
+    if st.session_state.dashboard_tab == "live":
+        _render_live_context_tab()
+    else:
+        _render_recommendations_tab()
+
+
 # ─── PAGE: FEED ──────────────────────────────────────────────────────────────
+
 
 def render_page_feed():
     st.markdown("# Your Feed")
-    st.markdown('<p style="color: #86868b; margin-top: -8px;">Personalized news, curated by AI.</p>', unsafe_allow_html=True)
+    st.markdown(
+        '<p style="color: #86868b; margin-top: -8px;">Personalized news, curated by AI.</p>',
+        unsafe_allow_html=True,
+    )
 
     uid = st.session_state.current_user_id
 
@@ -1169,7 +1848,8 @@ def render_page_feed():
         st.session_state.current_mood = mood_result["detected_mood"]
         st.session_state.mood_categories = mood_result["final_categories"]
 
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="context-bar">
             <div class="context-card">
                 <div class="context-value">{mood_result['detected_mood'].title()}</div>
@@ -1184,26 +1864,34 @@ def render_page_feed():
                 <div class="context-label">Confidence</div>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
 
     # Category filter
     with st.expander("🏷️ Filter by categories", expanded=False):
         selected_cats = st.multiselect(
-            "Focus on:", options=CATEGORIES, default=[],
+            "Focus on:",
+            options=CATEGORIES,
+            default=[],
             format_func=lambda x: f"{get_category_emoji(x)} {get_category_label(x)}",
         )
 
     # Generate
     col_gen, col_sig = st.columns([3, 1])
     with col_gen:
-        gen_btn = st.button("🚀 Get Recommendations", type="primary", use_container_width=True)
+        gen_btn = st.button(
+            "🚀 Get Recommendations", type="primary", use_container_width=True
+        )
     with col_sig:
         show_signals = st.checkbox("Show signals", value=False)
 
     if gen_btn:
-        mood_cats = list(set(selected_cats + st.session_state.get("mood_categories", [])))
+        mood_cats = list(
+            set(selected_cats + st.session_state.get("mood_categories", []))
+        )
 
         with st.spinner("AI is curating your feed..."):
             history = engine.user_profiles.get(uid, {}).get("history_ids", [])
@@ -1216,13 +1904,17 @@ def render_page_feed():
 
             if history:
                 recs = engine.recommend(
-                    user_id=uid, history_ids=history,
+                    user_id=uid,
+                    history_ids=history,
                     mood_categories=mood_cats if mood_cats else [],
-                    excluded_ids=disliked, num_recommendations=20,
+                    excluded_ids=disliked,
+                    num_recommendations=20,
                 )
             else:
                 recs = engine.get_cold_start_recommendations(
-                    preferred_categories=mood_cats if mood_cats else st.session_state.mood_categories,
+                    preferred_categories=(
+                        mood_cats if mood_cats else st.session_state.mood_categories
+                    ),
                     num_recommendations=20,
                 )
 
@@ -1247,7 +1939,8 @@ def render_page_feed():
         sim_cols = st.columns(3)
         for i, art in enumerate(similar):
             with sim_cols[i]:
-                st.markdown(f"""
+                st.markdown(
+                    f"""
                 <div style="background:#1c1c1e; border-radius:12px; padding:14px; border:1px solid #2c2c2e;">
                     <div style="font-size:0.75rem; color:#0a84ff;">{art['category'].upper()}</div>
                     <div style="font-size:0.9rem; font-weight:600; color:#f5f5f7; margin-top:4px;">
@@ -1257,7 +1950,9 @@ def render_page_feed():
                         {art['abstract'][:100]}...
                     </div>
                 </div>
-                """, unsafe_allow_html=True)
+                """,
+                    unsafe_allow_html=True,
+                )
 
                 if st.button("👍 Like", key=f"sim_like_{art['news_id']}_{i}"):
                     handle_click(art, "like")
@@ -1272,7 +1967,8 @@ def render_page_feed():
         latency = st.session_state.rec_latency
         latency_class = "slow" if latency > 2000 else ""
 
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
             <span style="color: #86868b; font-size: 0.85rem;">
                 <span class="live-dot"></span>
@@ -1280,7 +1976,9 @@ def render_page_feed():
             </span>
             <span class="latency-badge {latency_class}">⚡ {latency:.0f}ms</span>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
         filtered = recs
         if selected_cats:
@@ -1292,44 +1990,59 @@ def render_page_feed():
         col1, col2 = st.columns(2)
         for idx, article in enumerate(filtered):
             with col1 if idx % 2 == 0 else col2:
-                render_news_card(article, show_signals=show_signals, show_actions=True, idx=idx)
+                render_news_card(
+                    article, show_signals=show_signals, show_actions=True, idx=idx
+                )
 
     elif uid:
-        st.markdown("""
+        st.markdown(
+            """
         <div style="text-align:center; padding:40px 0; color:#48484a;">
             <div style="font-size:2rem; margin-bottom:12px;">📰</div>
             <div style="font-size:1rem; color:#86868b;">Click <strong style="color:#0a84ff;">Get Recommendations</strong> above to load your personalized feed.</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
 
 
 # ─── PAGE: LIKED ─────────────────────────────────────────────────────────────
 
+
 def render_page_liked():
     """Display all articles the user has liked."""
     st.markdown("# ❤️ Liked Articles")
-    st.markdown('<p style="color: #86868b; margin-top: -8px;">Articles you\'ve saved by liking them.</p>', unsafe_allow_html=True)
+    st.markdown(
+        '<p style="color: #86868b; margin-top: -8px;">Articles you\'ve saved by liking them.</p>',
+        unsafe_allow_html=True,
+    )
 
     liked = st.session_state.get("liked_articles", [])
 
     if not liked:
-        st.markdown("""
+        st.markdown(
+            """
         <div style="text-align: center; padding: 60px 20px;">
             <div style="font-size: 3rem; margin-bottom: 16px;">❤️</div>
             <div style="font-size: 1.2rem; font-weight: 600; color: #f5f5f7; margin-bottom: 8px;">No liked articles yet</div>
             <div style="color: #86868b; font-size: 0.9rem;">Head to the Feed and tap 👍 on articles you enjoy — they'll appear here.</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
         return
 
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <span style="color: #86868b; font-size: 0.85rem;">
             <span style="color: #ff375f;">❤️</span>
             &nbsp;{len(liked)} liked article{"s" if len(liked) != 1 else ""}
         </span>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     # Category filter for liked articles
     liked_cats = sorted(set(a.get("category", "") for a in liked if a.get("category")))
@@ -1337,7 +2050,11 @@ def render_page_liked():
         filter_cat = st.selectbox(
             "Filter by category",
             ["All"] + liked_cats,
-            format_func=lambda x: f"{get_category_emoji(x)} {get_category_label(x)}" if x != "All" else "📋 All Categories",
+            format_func=lambda x: (
+                f"{get_category_emoji(x)} {get_category_label(x)}"
+                if x != "All"
+                else "📋 All Categories"
+            ),
             label_visibility="collapsed",
         )
         if filter_cat != "All":
@@ -1351,12 +2068,15 @@ def render_page_liked():
             liked_at = ""
             if article.get("liked_at"):
                 try:
-                    dt = datetime.fromisoformat(str(article["liked_at"]).replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(
+                        str(article["liked_at"]).replace("Z", "+00:00")
+                    )
                     liked_at = dt.strftime("%b %d, %I:%M %p")
                 except Exception:
                     pass
 
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div class="news-card" style="animation-delay: {idx * 0.06}s; border-left: 3px solid #ff375f;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                     <span class="category-badge {cat if cat in CATEGORY_INFO else 'default'}">{emoji} {cat}</span>
@@ -1365,12 +2085,15 @@ def render_page_liked():
                 <div class="news-title">{article.get("title", "Untitled")}</div>
                 {f'<div class="news-abstract">{article.get("abstract", "")}</div>' if article.get("abstract") else ""}
             </div>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
 
             # Unlike button
             if st.button("💔 Unlike", key=f"unlike_{article['news_id']}_{idx}"):
                 st.session_state.liked_articles = [
-                    a for a in st.session_state.liked_articles
+                    a
+                    for a in st.session_state.liked_articles
                     if a["news_id"] != article["news_id"]
                 ]
                 st.toast("Removed from liked articles.", icon="💔")
@@ -1379,21 +2102,35 @@ def render_page_liked():
 
 # ─── PAGE: LIVE NEWS ─────────────────────────────────────────────────────────
 
+
 def render_page_live_news():
     """Live news from NewsAPI — real-time current headlines."""
     st.markdown("# 🔴 Live News")
-    st.markdown('<p style="color: #86868b; margin-top: -8px;">Current headlines from around the world.</p>', unsafe_allow_html=True)
+    st.markdown(
+        '<p style="color: #86868b; margin-top: -8px;">Current headlines from around the world.</p>',
+        unsafe_allow_html=True,
+    )
 
     if not is_news_api_configured():
         st.warning("⚠️ NewsAPI is not configured. Add your API key to `.env`:")
         st.code('NEWS_API_KEY="your_newsapi_org_key_here"', language="bash")
-        st.markdown("[Get a free API key at newsapi.org →](https://newsapi.org/register)")
+        st.markdown(
+            "[Get a free API key at newsapi.org →](https://newsapi.org/register)"
+        )
         return
 
     uid = st.session_state.current_user_id
 
     # Category selector
-    live_categories = ["general", "business", "technology", "sports", "entertainment", "health", "science"]
+    live_categories = [
+        "general",
+        "business",
+        "technology",
+        "sports",
+        "entertainment",
+        "health",
+        "science",
+    ]
     selected_cat = st.selectbox(
         "Category",
         live_categories,
@@ -1403,9 +2140,13 @@ def render_page_live_news():
 
     col_fetch, col_count = st.columns([3, 1])
     with col_fetch:
-        fetch_btn = st.button("🔄 Fetch Latest Headlines", type="primary", use_container_width=True)
+        fetch_btn = st.button(
+            "🔄 Fetch Latest Headlines", type="primary", use_container_width=True
+        )
     with col_count:
-        count = st.selectbox("Articles", [10, 15, 20], index=0, label_visibility="collapsed")
+        count = st.selectbox(
+            "Articles", [10, 15, 20], index=0, label_visibility="collapsed"
+        )
 
     # Fetch
     if fetch_btn or not st.session_state.live_news:
@@ -1422,7 +2163,8 @@ def render_page_live_news():
     if not articles:
         return
 
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <span style="color: #86868b; font-size: 0.85rem;">
             <span class="live-dot"></span>
@@ -1432,7 +2174,9 @@ def render_page_live_news():
             🔴 LIVE
         </span>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     col1, col2 = st.columns(2)
     for idx, article in enumerate(articles):
@@ -1443,13 +2187,16 @@ def render_page_live_news():
             pub_time = ""
             if article.get("published_at"):
                 try:
-                    dt = datetime.fromisoformat(article["published_at"].replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(
+                        article["published_at"].replace("Z", "+00:00")
+                    )
                     pub_time = dt.strftime("%b %d, %I:%M %p")
                 except Exception:
                     pass
 
             # Live news card
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div class="news-card" style="animation-delay: {idx * 0.06}s">
                 <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
                     <span class="live-dot"></span>
@@ -1463,7 +2210,9 @@ def render_page_live_news():
                     <span class="category-badge {cat}">{emoji} {cat}</span>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
 
             # Action buttons for live articles
             c1, c2, c3 = st.columns([1, 1, 1.5])
@@ -1481,6 +2230,7 @@ def render_page_live_news():
 
 # ─── PAGE: PROFILE ───────────────────────────────────────────────────────────
 
+
 def render_page_profile():
     st.markdown("# Profile")
 
@@ -1490,31 +2240,45 @@ def render_page_profile():
     if profile:
         c1, c2, c3, c4 = st.columns(4)
         with c1:
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div class="stat-card">
                 <div class="stat-number">{profile['total_clicks']}</div>
                 <div class="stat-label">Articles Read</div>
-            </div>""", unsafe_allow_html=True)
+            </div>""",
+                unsafe_allow_html=True,
+            )
         with c2:
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div class="stat-card">
                 <div class="stat-number">{profile['num_sessions']}</div>
                 <div class="stat-label">Sessions</div>
-            </div>""", unsafe_allow_html=True)
+            </div>""",
+                unsafe_allow_html=True,
+            )
         with c3:
-            top_cat = profile['top_categories'][0][0] if profile['top_categories'] else "N/A"
-            st.markdown(f"""
+            top_cat = (
+                profile["top_categories"][0][0] if profile["top_categories"] else "N/A"
+            )
+            st.markdown(
+                f"""
             <div class="stat-card">
                 <div class="stat-number">{get_category_emoji(top_cat)}</div>
                 <div class="stat-label">Top: {top_cat}</div>
-            </div>""", unsafe_allow_html=True)
+            </div>""",
+                unsafe_allow_html=True,
+            )
         with c4:
             hour_str = f"{int(profile['avg_active_hour'])}:00"
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div class="stat-card">
                 <div class="stat-number">🕐</div>
                 <div class="stat-label">Active ~{hour_str}</div>
-            </div>""", unsafe_allow_html=True)
+            </div>""",
+                unsafe_allow_html=True,
+            )
 
         st.markdown("---")
 
@@ -1524,29 +2288,45 @@ def render_page_profile():
             st.markdown("### Category Distribution")
             if profile.get("category_dist"):
                 cat_data = profile["category_dist"]
-                df_cats = pd.DataFrame([
-                    {"Category": f"{get_category_emoji(k)} {k.title()}", "Proportion": v}
-                    for k, v in sorted(cat_data.items(), key=lambda x: x[1], reverse=True) if v > 0
-                ])
+                df_cats = pd.DataFrame(
+                    [
+                        {
+                            "Category": f"{get_category_emoji(k)} {k.title()}",
+                            "Proportion": v,
+                        }
+                        for k, v in sorted(
+                            cat_data.items(), key=lambda x: x[1], reverse=True
+                        )
+                        if v > 0
+                    ]
+                )
                 fig = px.bar(
-                    df_cats.head(10), x="Proportion", y="Category", orientation="h",
+                    df_cats.head(10),
+                    x="Proportion",
+                    y="Category",
+                    orientation="h",
                     color="Proportion",
                     color_continuous_scale=["#1c1c1e", "#0a84ff", "#5e5ce6"],
                 )
                 fig.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#86868b', family='Inter'),
-                    showlegend=False, coloraxis_showscale=False,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#86868b", family="Inter"),
+                    showlegend=False,
+                    coloraxis_showscale=False,
                     xaxis=dict(showgrid=False, title=""),
                     yaxis=dict(showgrid=False, title=""),
-                    margin=dict(l=0, r=0, t=10, b=10), height=350,
+                    margin=dict(l=0, r=0, t=10, b=10),
+                    height=350,
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
         with col2:
             st.markdown("### RL Bandit State")
             bandit_scores = engine.bandit.get_category_scores(uid)
-            sorted_scores = sorted(bandit_scores.items(), key=lambda x: x[1], reverse=True)
+            sorted_scores = sorted(
+                bandit_scores.items(), key=lambda x: x[1], reverse=True
+            )
             for cat, score in sorted_scores[:6]:
                 emoji = get_category_emoji(cat)
                 bar_len = int(score * 30)
@@ -1557,7 +2337,8 @@ def render_page_profile():
 
         st.markdown("### Update Preferences")
         pref_cats = st.multiselect(
-            "Preferred Categories", options=CATEGORIES,
+            "Preferred Categories",
+            options=CATEGORIES,
             default=[c for c, _ in profile.get("top_categories", [])[:3]],
             format_func=lambda x: f"{get_category_emoji(x)} {get_category_label(x)}",
             label_visibility="collapsed",
@@ -1570,15 +2351,22 @@ def render_page_profile():
 
     else:
         st.markdown(f"### New User: `{uid}`")
-        interests = st.session_state.auth_user.get("interests", []) if st.session_state.auth_user else []
+        interests = (
+            st.session_state.auth_user.get("interests", [])
+            if st.session_state.auth_user
+            else []
+        )
         if interests:
             st.markdown("**Your selected interests:**")
             for cat in interests:
-                st.markdown(f"- {get_category_emoji(cat)} **{get_category_label(cat)}**")
+                st.markdown(
+                    f"- {get_category_emoji(cat)} **{get_category_label(cat)}**"
+                )
         st.info("Start reading articles on the Feed page to build your profile!")
 
 
 # ─── PAGE: ANALYTICS ─────────────────────────────────────────────────────────
+
 
 def render_page_analytics():
     st.markdown("# Analytics")
@@ -1593,7 +2381,14 @@ def render_page_analytics():
     with c2:
         st.metric("Articles", f"{len(engine.news_dict):,}" if engine.news_dict else "0")
     with c3:
-        st.metric("Categories", f"{len(set(a['category'] for a in engine.news_dict.values()))}" if engine.news_dict else "0")
+        st.metric(
+            "Categories",
+            (
+                f"{len(set(a['category'] for a in engine.news_dict.values()))}"
+                if engine.news_dict
+                else "0"
+            ),
+        )
     with c4:
         st.metric("Latency", f"{st.session_state.rec_latency:.0f}ms")
 
@@ -1605,21 +2400,32 @@ def render_page_analytics():
         with col1:
             st.markdown("### Recommendation Diversity")
             if st.session_state.recommendations:
-                rec_cats = Counter(r["category"] for r in st.session_state.recommendations)
-                df_div = pd.DataFrame([
-                    {"Category": f"{get_category_emoji(k)} {k}", "Count": v}
-                    for k, v in rec_cats.most_common()
-                ])
+                rec_cats = Counter(
+                    r["category"] for r in st.session_state.recommendations
+                )
+                df_div = pd.DataFrame(
+                    [
+                        {"Category": f"{get_category_emoji(k)} {k}", "Count": v}
+                        for k, v in rec_cats.most_common()
+                    ]
+                )
                 fig = px.bar(
-                    df_div, x="Category", y="Count", color="Count",
+                    df_div,
+                    x="Category",
+                    y="Count",
+                    color="Count",
                     color_continuous_scale=["#1c1c1e", "#0a84ff", "#5e5ce6"],
                 )
                 fig.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#86868b', family='Inter'),
-                    showlegend=False, coloraxis_showscale=False,
-                    xaxis=dict(showgrid=False), yaxis=dict(showgrid=False),
-                    margin=dict(l=0, r=0, t=10, b=10), height=300,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#86868b", family="Inter"),
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(showgrid=False),
+                    margin=dict(l=0, r=0, t=10, b=10),
+                    height=300,
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -1628,20 +2434,34 @@ def render_page_analytics():
         with col2:
             st.markdown("### Session Clicks")
             if st.session_state.session_clicks:
-                click_cats = Counter(c["category"] for c in st.session_state.session_clicks)
-                df_clicks = pd.DataFrame([
-                    {"Category": f"{get_category_emoji(k)} {k}", "Clicks": v}
-                    for k, v in click_cats.most_common()
-                ])
+                click_cats = Counter(
+                    c["category"] for c in st.session_state.session_clicks
+                )
+                df_clicks = pd.DataFrame(
+                    [
+                        {"Category": f"{get_category_emoji(k)} {k}", "Clicks": v}
+                        for k, v in click_cats.most_common()
+                    ]
+                )
                 fig = px.pie(
-                    df_clicks, values="Clicks", names="Category",
-                    color_discrete_sequence=["#0a84ff", "#5e5ce6", "#bf5af2", "#30d158", "#ff9f0a"],
+                    df_clicks,
+                    values="Clicks",
+                    names="Category",
+                    color_discrete_sequence=[
+                        "#0a84ff",
+                        "#5e5ce6",
+                        "#bf5af2",
+                        "#30d158",
+                        "#ff9f0a",
+                    ],
                     hole=0.5,
                 )
                 fig.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                    font=dict(color='#86868b', family='Inter'),
-                    margin=dict(l=0, r=0, t=10, b=10), height=300,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#86868b", family="Inter"),
+                    margin=dict(l=0, r=0, t=10, b=10),
+                    height=300,
                 )
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -1656,22 +2476,35 @@ def render_page_analytics():
             df_lat["idx"] = range(1, len(df_lat) + 1)
 
             fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=df_lat["idx"], y=df_lat["latency_ms"],
-                mode="lines+markers",
-                line=dict(color="#0a84ff", width=2),
-                marker=dict(size=6, color="#5e5ce6"),
-                fill="tozeroy",
-                fillcolor="rgba(10, 132, 255, 0.06)",
-            ))
-            fig.add_hline(y=2000, line_dash="dash", line_color="#ff453a",
-                         annotation_text="2s threshold")
+            fig.add_trace(
+                go.Scatter(
+                    x=df_lat["idx"],
+                    y=df_lat["latency_ms"],
+                    mode="lines+markers",
+                    line=dict(color="#0a84ff", width=2),
+                    marker=dict(size=6, color="#5e5ce6"),
+                    fill="tozeroy",
+                    fillcolor="rgba(10, 132, 255, 0.06)",
+                )
+            )
+            fig.add_hline(
+                y=2000,
+                line_dash="dash",
+                line_color="#ff453a",
+                annotation_text="2s threshold",
+            )
             fig.update_layout(
-                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(color='#86868b', family='Inter'),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#86868b", family="Inter"),
                 xaxis=dict(title="Request #", showgrid=False),
-                yaxis=dict(title="Latency (ms)", showgrid=True, gridcolor='rgba(255,255,255,0.04)'),
-                margin=dict(l=0, r=0, t=20, b=40), height=280,
+                yaxis=dict(
+                    title="Latency (ms)",
+                    showgrid=True,
+                    gridcolor="rgba(255,255,255,0.04)",
+                ),
+                margin=dict(l=0, r=0, t=20, b=40),
+                height=280,
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -1691,7 +2524,9 @@ def render_page_analytics():
             if st.session_state.recommendations:
                 for i, a in enumerate(st.session_state.recommendations[:5]):
                     e = get_category_emoji(a.get("category", ""))
-                    st.markdown(f"{i+1}. {e} {a['title'][:55]}... ({a.get('score',0):.3f})")
+                    st.markdown(
+                        f"{i+1}. {e} {a['title'][:55]}... ({a.get('score',0):.3f})"
+                    )
             else:
                 st.info("Generate recommendations first.")
 
@@ -1699,24 +2534,36 @@ def render_page_analytics():
         st.markdown("---")
         st.markdown("### RL Agent State")
         bandit_scores = engine.bandit.get_category_scores(uid)
-        df_bandit = pd.DataFrame([
-            {"Category": f"{get_category_emoji(k)} {k.title()}", "P(click)": v}
-            for k, v in sorted(bandit_scores.items(), key=lambda x: x[1], reverse=True)
-            if v > 0.01
-        ])
+        df_bandit = pd.DataFrame(
+            [
+                {"Category": f"{get_category_emoji(k)} {k.title()}", "P(click)": v}
+                for k, v in sorted(
+                    bandit_scores.items(), key=lambda x: x[1], reverse=True
+                )
+                if v > 0.01
+            ]
+        )
         if not df_bandit.empty:
             fig = px.bar(
-                df_bandit.head(12), x="P(click)", y="Category", orientation="h",
+                df_bandit.head(12),
+                x="P(click)",
+                y="Category",
+                orientation="h",
                 color="P(click)",
                 color_continuous_scale=["#1c1c1e", "#0a84ff", "#5e5ce6", "#bf5af2"],
             )
             fig.update_layout(
-                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-                font=dict(color='#86868b', family='Inter'),
-                showlegend=False, coloraxis_showscale=False,
-                xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.04)', title="P(click)"),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#86868b", family="Inter"),
+                showlegend=False,
+                coloraxis_showscale=False,
+                xaxis=dict(
+                    showgrid=True, gridcolor="rgba(255,255,255,0.04)", title="P(click)"
+                ),
                 yaxis=dict(showgrid=False, title=""),
-                margin=dict(l=0, r=0, t=10, b=10), height=350,
+                margin=dict(l=0, r=0, t=10, b=10),
+                height=350,
             )
             st.plotly_chart(fig, use_container_width=True)
 
