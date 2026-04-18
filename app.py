@@ -973,6 +973,9 @@ def generate_recs():
 
 
 def render_dashboard():
+    # In app.py - Inside render_dashboard()
+    sensitive_mode = st.session_state.auth_user.get("is_sensitive", False)
+    recommendations = engine.recommend(st.session_state.current_user_id, is_sensitive=sensitive_mode)
     """Main dashboard with sidebar navigation."""
     # ─── SIDEBAR ──────────────────────────────────────────────────
     with st.sidebar:
