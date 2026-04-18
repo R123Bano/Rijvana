@@ -260,3 +260,8 @@ def get_user_stats(user_id: str) -> Dict:
 
 # Initialize on import
 init_db()
+# In database.py - Update the user creation logic
+def create_user(username, password, is_sensitive=False):
+    # Add is_sensitive to your INSERT SQL statement
+    cursor.execute("INSERT INTO users (username, password, is_sensitive) VALUES (?, ?, ?)", 
+                  (username, password, 1 if is_sensitive else 0))
