@@ -36,7 +36,33 @@ NUM_CATEGORIES = len(CATEGORIES)
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. CONTEXTUAL BANDIT — Thompson Sampling per Category
 # ═══════════════════════════════════════════════════════════════════════════════
-
+# In recommendation_engine.py
+def recommend(user_id, is_sensitive=False):
+    # 1. Get raw recommendations from the RL bandit
+    raw_recs = self.get_bandit_recommendations(user_id)
+    
+    if is_sensitive:
+        # 2. Define the filter
+        trauma_keywords = {"killed", "murder", "casualty", "tragedy", "death", "shooting", "disaster"}
+        blacklisted_categories = {"crime", "war", "violence"}
+        
+        filtered_recs = []
+        for article in raw_recs:
+            # Check title and abstract for trauma keywords
+            title_words = set(article['title'].lower().split())
+            abstract_words = set(article['abstract'].lower().split())
+            
+            is_safe = not (
+                title_words.intersection(trauma_keywords) or 
+                abstract_words.intersection(trauma_keywords) or
+                article['category'] in blacklisted_categories
+            )
+            
+            if is_safe:
+                filtered_recs.append(article)
+        return filtered_recs
+        
+    return raw_recs
 class ContextualBandit:
     """
     Thompson Sampling Contextual Bandit for news category selection.
