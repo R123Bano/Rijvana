@@ -570,6 +570,16 @@ def render_welcome():
 
 
 def render_onboarding():
+    # In app.py - Inside render_onboarding()
+    st.markdown("### 🛡️ Privacy & Comfort")
+    is_sensitive = st.toggle("Enable Sensitive Content Filter", help="Filters out news related to trauma, crime, or disasters.")
+
+    if st.button("Complete Onboarding"):
+    # Update the session state and database
+    st.session_state.auth_user["is_sensitive"] = is_sensitive
+    update_user_preferences(st.session_state.current_user_id, selected_interests, is_sensitive)
+    st.session_state.stage = "dashboard"
+    st.rerun()
     """Interest selection screen — pick 3 categories."""
     st.markdown(
         """
